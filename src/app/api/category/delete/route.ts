@@ -6,11 +6,8 @@ export async function DELETE(request: NextRequest) {
   try {
     // Verify authentication and company context
     const contextResult = validateCompanyContext(request);
-    if ('error' in contextResult) {
-      return NextResponse.json(
-        { error: contextResult.error },
-        { status: 401 }
-      );
+    if ("error" in contextResult) {
+      return NextResponse.json({ error: contextResult.error }, { status: 401 });
     }
 
     const { companyId } = contextResult;
@@ -19,82 +16,107 @@ export async function DELETE(request: NextRequest) {
     const { categoryId } = await request.json();
 
     if (!categoryId) {
-      return NextResponse.json(
-        { error: "Category ID is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Category ID is required" }, { status: 400 });
     }
 
-    // Verify the category exists and belongs to the company
-    const { data: category, error: categoryError } = await supabase
+    // Check if category exists and belongs to the company
+    const { data: existingCategory, error: checkError } = await supabase
       .from("chart_of_accounts")
-      .select("*")
+      .select("id, name")
       .eq("id", categoryId)
       .eq("company_id", companyId)
       .single();
 
-    if (categoryError || !category) {
-      return NextResponse.json(
-        { error: "Category not found" },
-        { status: 404 }
-      );
+    if (checkError || !existingCategory) {
+      return NextResponse.json({ error: "Category not found" }, { status: 404 });
     }
 
-    // Check if category has subcategories
-    const { data: subcategories, error: subcategoriesError } = await supabase
+    // Check if category has child categories
+    const { data: childCategories, error: childError } = await supabase
       .from("chart_of_accounts")
-      .select("id")
+      .select("id, name")
       .eq("parent_id", categoryId)
-      .eq("company_id", companyId);
+      .limit(1);
 
-    if (subcategoriesError) {
-      return NextResponse.json(
-        { error: "Error checking subcategories" },
-        { status: 500 }
-      );
+    if (childError) {
+      console.error("Error checking child categories:", childError);
+      return NextResponse.json({ error: "Error checking child categories" }, { status: 500 });
     }
 
-    if (subcategories && subcategories.length > 0) {
+    if (childCategories && childCategories.length > 0) {
       return NextResponse.json(
-        { error: `Cannot delete category because it has ${subcategories.length} subcategories. Please delete or reassign them first.` },
+        {
+          error: `Cannot delete category "${existingCategory.name}" because it has child categories. Please delete or reassign the child categories first.`,
+        },
         { status: 400 }
       );
     }
 
-    // Check if category is used in transactions
-    const { data: transactions, error: txError } = await supabase
+    // Check if category is being used in transactions
+    const { data: transactionsUsingCategory, error: transactionError } = await supabase
       .from("transactions")
       .select("id")
-      .or(`selected_category_id.eq.${categoryId},corresponding_category_id.eq.${categoryId}`)
-      .eq("company_id", companyId)
+      .eq("selected_category_id", categoryId)
       .limit(1);
 
-    if (txError) {
+    if (transactionError) {
+      console.error("Error checking category usage in transactions:", transactionError);
+      return NextResponse.json({ error: "Error checking category usage" }, { status: 500 });
+    }
+
+    if (transactionsUsingCategory && transactionsUsingCategory.length > 0) {
       return NextResponse.json(
-        { error: "Error checking if category is in use" },
-        { status: 500 }
+        { error: `Cannot delete category "${existingCategory.name}" because it is being used in transactions.` },
+        { status: 400 }
       );
     }
 
-    if (transactions && transactions.length > 0) {
+    // Check if category is being used in imported transactions
+    const { data: importedTransactionsUsingCategory, error: importedTransactionError } = await supabase
+      .from("imported_transactions")
+      .select("id")
+      .eq("selected_category_id", categoryId)
+      .limit(1);
+
+    if (importedTransactionError) {
+      console.error("Error checking category usage in imported transactions:", importedTransactionError);
+      return NextResponse.json({ error: "Error checking category usage" }, { status: 500 });
+    }
+
+    if (importedTransactionsUsingCategory && importedTransactionsUsingCategory.length > 0) {
       return NextResponse.json(
-        { error: "Cannot delete category because it is used in existing transactions. Please reassign or delete the transactions first." },
+        {
+          error: `Cannot delete category "${existingCategory.name}" because it is being used in imported transactions.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // Check if category is being used in journal entries
+    const { data: journalEntriesUsingCategory, error: journalError } = await supabase
+      .from("journal")
+      .select("id")
+      .eq("chart_account_id", categoryId)
+      .limit(1);
+
+    if (journalError) {
+      console.error("Error checking category usage in journal entries:", journalError);
+      return NextResponse.json({ error: "Error checking category usage" }, { status: 500 });
+    }
+
+    if (journalEntriesUsingCategory && journalEntriesUsingCategory.length > 0) {
+      return NextResponse.json(
+        { error: `Cannot delete category "${existingCategory.name}" because it is being used in journal entries.` },
         { status: 400 }
       );
     }
 
     // Delete the category
-    const { error: deleteError } = await supabase
-      .from("chart_of_accounts")
-      .delete()
-      .eq("id", categoryId)
-      .eq("company_id", companyId);
+    const { error: deleteError } = await supabase.from("chart_of_accounts").delete().eq("id", categoryId);
 
     if (deleteError) {
-      return NextResponse.json(
-        { error: `Failed to delete category: ${deleteError.message}` },
-        { status: 500 }
-      );
+      console.error("Error deleting category:", deleteError);
+      return NextResponse.json({ error: `Failed to delete category: ${deleteError.message}` }, { status: 500 });
     }
 
     // Get updated categories list
@@ -111,14 +133,11 @@ export async function DELETE(request: NextRequest) {
     }
 
     return NextResponse.json({
-      success: true,
-      categories: categories || []
+      message: `Category "${existingCategory.name}" deleted successfully`,
+      categories: categories || [],
     });
   } catch (error) {
     console.error("Error in DELETE /api/category/delete:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
-} 
+}

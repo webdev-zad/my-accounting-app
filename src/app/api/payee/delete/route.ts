@@ -6,11 +6,8 @@ export async function DELETE(request: NextRequest) {
   try {
     // Verify authentication and company context
     const contextResult = validateCompanyContext(request);
-    if ('error' in contextResult) {
-      return NextResponse.json(
-        { error: contextResult.error },
-        { status: 401 }
-      );
+    if ("error" in contextResult) {
+      return NextResponse.json({ error: contextResult.error }, { status: 401 });
     }
 
     const { companyId } = contextResult;
@@ -19,63 +16,65 @@ export async function DELETE(request: NextRequest) {
     const { payeeId } = await request.json();
 
     if (!payeeId) {
-      return NextResponse.json(
-        { error: "Payee ID is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Payee ID is required" }, { status: 400 });
     }
 
-    // Verify the payee exists and belongs to the company
-    const { data: payee, error: payeeError } = await supabase
+    // Check if payee exists and belongs to the company
+    const { data: existingPayee, error: checkError } = await supabase
       .from("payees")
-      .select("*")
+      .select("id, name")
       .eq("id", payeeId)
       .eq("company_id", companyId)
       .single();
 
-    if (payeeError || !payee) {
-      return NextResponse.json(
-        { error: "Payee not found" },
-        { status: 404 }
-      );
+    if (checkError || !existingPayee) {
+      return NextResponse.json({ error: "Payee not found" }, { status: 404 });
     }
 
-    // Check if payee is used in transactions
-    const { data: transactions, error: txError } = await supabase
+    // Check if payee is being used in transactions
+    const { data: transactionsUsingPayee, error: transactionError } = await supabase
       .from("transactions")
       .select("id")
       .eq("payee_id", payeeId)
-      .eq("company_id", companyId)
       .limit(1);
 
-    if (txError) {
-      console.error("Error checking transactions:", txError);
+    if (transactionError) {
+      console.error("Error checking payee usage in transactions:", transactionError);
+      return NextResponse.json({ error: "Error checking payee usage" }, { status: 500 });
+    }
+
+    if (transactionsUsingPayee && transactionsUsingPayee.length > 0) {
       return NextResponse.json(
-        { error: "Error checking if payee is in use" },
-        { status: 500 }
+        { error: `Cannot delete payee "${existingPayee.name}" because it is being used in transactions.` },
+        { status: 400 }
       );
     }
 
-    if (transactions && transactions.length > 0) {
+    // Check if payee is being used in imported transactions
+    const { data: importedTransactionsUsingPayee, error: importedTransactionError } = await supabase
+      .from("imported_transactions")
+      .select("id")
+      .eq("payee_id", payeeId)
+      .limit(1);
+
+    if (importedTransactionError) {
+      console.error("Error checking payee usage in imported transactions:", importedTransactionError);
+      return NextResponse.json({ error: "Error checking payee usage" }, { status: 500 });
+    }
+
+    if (importedTransactionsUsingPayee && importedTransactionsUsingPayee.length > 0) {
       return NextResponse.json(
-        { error: "Cannot delete payee because it is used in existing transactions. Please reassign or delete the transactions first." },
+        { error: `Cannot delete payee "${existingPayee.name}" because it is being used in imported transactions.` },
         { status: 400 }
       );
     }
 
     // Delete the payee
-    const { error: deleteError } = await supabase
-      .from("payees")
-      .delete()
-      .eq("id", payeeId)
-      .eq("company_id", companyId);
+    const { error: deleteError } = await supabase.from("payees").delete().eq("id", payeeId);
 
     if (deleteError) {
       console.error("Error deleting payee:", deleteError);
-      return NextResponse.json(
-        { error: `Failed to delete payee: ${deleteError.message}` },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: `Failed to delete payee: ${deleteError.message}` }, { status: 500 });
     }
 
     // Get updated payees list
@@ -90,14 +89,11 @@ export async function DELETE(request: NextRequest) {
     }
 
     return NextResponse.json({
-      success: true,
-      payees: payees || []
+      message: `Payee "${existingPayee.name}" deleted successfully`,
+      payees: payees || [],
     });
   } catch (error) {
     console.error("Error in DELETE /api/payee/delete:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
-} 
+}

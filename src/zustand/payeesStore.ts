@@ -2,42 +2,31 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 
-// Types
-export interface Payee {
+interface Payee {
   id: string;
   name: string;
   company_id: string;
+  created_at: string;
+  updated_at: string;
 }
 
-// Helper function to sort payees alphabetically by name
-const sortPayees = (payees: Payee[]): Payee[] => {
-  return [...payees].sort((a, b) => a.name.localeCompare(b.name));
-};
-
-// Store interface
 interface PayeesState {
-  // Payees data
   payees: Payee[];
   isLoading: boolean;
   error: string | null;
 
-  // Highlighting for real-time updates
-  highlightedPayeeIds: Set<string>;
-  lastActionPayeeId: string | null;
-
   // Actions
   refreshPayees: () => Promise<void>;
-  addPayee: (payee: { name: string }) => Promise<Payee | null>;
-  createPayeeForTransaction: (payeeData: {
-    name: string;
-  }) => Promise<{ success: boolean; payeeId?: string; error?: string }>;
-  updatePayee: (idOrName: string, updates: { name: string }) => Promise<boolean>;
-  deletePayee: (idOrName: string) => Promise<boolean>;
-  highlightPayee: (payeeId: string) => void;
-  clearError: () => void;
-
-  // Helper functions
-  findPayeeByName: (name: string, caseSensitive?: boolean) => Payee | null;
+  addPayee: (payeeData: { name: string }) => Promise<void>;
+  createPayeeForTransaction: (name: string) => Promise<Payee | null>;
+  updatePayee: (id: string, name: string) => Promise<void>;
+  deletePayee: (id: string) => Promise<void>;
+  bulkDeletePayees: (ids: string[]) => Promise<void>;
+  mergePayees: (sourceId: string, targetId: string) => Promise<void>;
+  downloadPayees: () => Promise<void>;
+  setPayees: (payees: Payee[]) => void;
+  setLoading: (loading: boolean) => void;
+  setError: (error: string | null) => void;
 
   // Real-time subscriptions
   subscriptions: ReturnType<typeof supabase.channel>[];
@@ -46,33 +35,24 @@ interface PayeesState {
 }
 
 export const usePayeesStore = create<PayeesState>((set, get) => ({
-  // Initial state
   payees: [],
   isLoading: false,
   error: null,
-  highlightedPayeeIds: new Set(),
-  lastActionPayeeId: null,
   subscriptions: [],
 
-  // Actions
   refreshPayees: async () => {
     set({ isLoading: true, error: null });
     try {
       const response = await api.get("/api/payee");
-
       if (!response.ok) {
         const errorData = await response.json();
-        console.error("API error refreshing payees:", errorData.error);
-        set({ error: errorData.error || "Failed to refresh payees", isLoading: false });
-        return;
+        throw new Error(errorData.error || "Failed to refresh payees");
       }
-
-      const result = await response.json();
-      set({ payees: result.payees || [], isLoading: false });
-    } catch (err) {
-      console.error("Error in refreshPayees:", err);
-      const errorMessage = err instanceof Error ? err.message : "Failed to refresh payees";
-      set({ error: errorMessage, isLoading: false });
+      const data = await response.json();
+      set({ payees: data.payees || [], isLoading: false });
+    } catch (error) {
+      console.error("Error refreshing payees:", error);
+      set({ error: error instanceof Error ? error.message : "Failed to refresh payees", isLoading: false });
     }
   },
 
@@ -84,256 +64,132 @@ export const usePayeesStore = create<PayeesState>((set, get) => ({
         name: payeeData.name.trim(),
       };
       console.log("API request data:", requestData); // Debug log
-
       // Call the API route
       const response = await api.post("/api/payee/create", requestData);
 
       if (!response.ok) {
         const errorData = await response.json();
-        console.error("API error adding payee:", errorData.error);
-        set({ error: errorData.error || "Failed to add payee" });
-        return null;
-      }
-
-      const result = await response.json();
-      const newPayee = result.payee as Payee;
-
-      // Update the store with the sorted payees from the API
-      if (result.payees) {
-        set({
-          payees: result.payees,
-          error: null,
-        });
-      } else {
-        // Fallback: add to existing payees with proper sorting if sorted list not available
-        const updatedPayees = [...get().payees, newPayee];
-        const sortedPayees = sortPayees(updatedPayees);
-        set({
-          payees: sortedPayees,
-          error: null,
-        });
-      }
-
-      // Highlight the new payee
-      get().highlightPayee(newPayee.id);
-
-      return newPayee;
-    } catch (err) {
-      console.error("Error in addPayee:", err);
-      const errorMessage = err instanceof Error ? err.message : "Network error occurred";
-      set({ error: errorMessage });
-      return null;
-    }
-  },
-
-  createPayeeForTransaction: async (payeeData) => {
-    try {
-      set({ isLoading: true, error: null });
-
-      if (!payeeData.name.trim()) {
-        return { success: false, error: "Payee name is required" };
-      }
-
-      // Make the API call directly like the working version in the page
-      const response = await api.post("/api/payee/create", {
-        name: payeeData.name.trim(),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Error creating payee:", errorData.error);
-        set({ error: errorData.error || "Failed to create payee" });
-        return { success: false, error: errorData.error || "Failed to create payee" };
+        throw new Error(errorData.error || "Failed to add payee");
       }
 
       const data = await response.json();
-      const payeeId = data.payee.id;
+      // Update the store with the new payees list
+      set({ payees: data.payees || [] });
+    } catch (error) {
+      console.error("Error adding payee:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to add payee");
+    }
+  },
 
-      // Update the store with the new payee data
-      if (data.payees) {
-        set({
-          payees: data.payees,
-          error: null,
-        });
-      } else {
-        // Refresh payees to get the latest list
-        await get().refreshPayees();
+  createPayeeForTransaction: async (name: string) => {
+    try {
+      const response = await api.post("/api/payee/create", { name: name.trim() });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create payee");
       }
-
-      // Highlight the new payee
-      get().highlightPayee(payeeId);
-
-      return { success: true, payeeId };
+      const data = await response.json();
+      set({ payees: data.payees || [] });
+      return data.payee || null;
     } catch (error) {
       console.error("Error creating payee for transaction:", error);
-      const errorMessage = error instanceof Error ? error.message : "Failed to create payee";
-      set({ error: errorMessage });
-      return { success: false, error: errorMessage };
-    } finally {
-      set({ isLoading: false });
+      throw new Error(error instanceof Error ? error.message : "Failed to create payee");
     }
   },
 
-  updatePayee: async (idOrName: string, updates) => {
-    // Determine if we have an ID or name
-    let payeeId = idOrName;
-
-    // Check if it looks like a UUID (ID) or a name
-    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrName);
-
-    if (!isUUID) {
-      // It's likely a name, find the payee by name
-      const payee = get().findPayeeByName(idOrName);
-      if (!payee) {
-        set({ error: `Payee not found: ${idOrName}` });
-        return false;
-      }
-      payeeId = payee.id;
-    }
-
+  updatePayee: async (id: string, name: string) => {
     try {
-      // Optimistic update with proper sorting
-      const { payees } = get();
-      const updatedPayees = payees.map((payee) => (payee.id === payeeId ? { ...payee, ...updates } : payee));
-
-      // Sort the payees to keep them alphabetically arranged
-      const sortedPayees = sortPayees(updatedPayees);
-      set({ payees: sortedPayees, error: null });
-
-      // Highlight immediately with optimistic update
-      get().highlightPayee(payeeId);
-
-      // Prepare data for API call
-      const requestData = {
-        id: payeeId,
-        name: updates.name.trim(),
-      };
-
-      // Call the API route
-      const response = await api.put("/api/payee/update", requestData);
-
+      const response = await api.put("/api/payee/update", { id, name });
       if (!response.ok) {
         const errorData = await response.json();
-        console.error("API error updating payee:", errorData.error);
-        // Revert optimistic update
-        set({ payees, error: errorData.error || "Failed to update payee" });
-        return false;
+        throw new Error(errorData.error || "Failed to update payee");
       }
-
-      const result = await response.json();
-
-      // Update the store with the sorted payees from the API if available
-      if (result.payees) {
-        set({
-          payees: result.payees,
-          error: null,
-        });
-      }
-
-      return true;
-    } catch (err) {
-      console.error("Error in updatePayee:", err);
-      // Revert optimistic update
-      const { payees } = get();
-      const errorMessage = err instanceof Error ? err.message : "Network error occurred";
-      set({ payees, error: errorMessage });
-      return false;
+      const data = await response.json();
+      set({ payees: data.payees || [] });
+    } catch (error) {
+      console.error("Error updating payee:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to update payee");
     }
   },
 
-  deletePayee: async (idOrName: string) => {
-    // Determine if we have an ID or name
-    let payeeId = idOrName;
-
-    // Check if it looks like a UUID (ID) or a name
-    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrName);
-
-    if (!isUUID) {
-      // It's likely a name, find the payee by name
-      const payee = get().findPayeeByName(idOrName);
-      if (!payee) {
-        set({ error: `Payee not found: ${idOrName}` });
-        return false;
-      }
-      payeeId = payee.id;
-    }
-
+  deletePayee: async (id: string) => {
     try {
-      // Capture original payees before optimistic delete
-      const { payees: originalPayees } = get();
-      const updatedPayees = originalPayees.filter((payee) => payee.id !== payeeId);
-
-      // Optimistic delete
-      set({ payees: updatedPayees, error: null });
-
-      // Call the API route
       const response = await api.delete("/api/payee/delete", {
-        body: JSON.stringify({ payeeId }),
+        body: JSON.stringify({ payeeId: id }),
       });
-
       if (!response.ok) {
         const errorData = await response.json();
-        console.error("API error deleting payee:", errorData.error);
-        // Revert optimistic delete
-        set({ payees: originalPayees, error: errorData.error || "Failed to delete payee" });
-        return false;
+        throw new Error(errorData.error || "Failed to delete payee");
       }
-
-      const result = await response.json();
-
-      // Update the store with the sorted payees from the API if available
-      if (result.payees) {
-        set({
-          payees: result.payees,
-          error: null,
-        });
-      }
-
-      return true;
-    } catch (err) {
-      console.error("Error in deletePayee:", err);
-      // Revert optimistic delete by refreshing from API
-      get().refreshPayees();
-      set({ error: "Failed to delete payee" });
-      return false;
+      const data = await response.json();
+      set({ payees: data.payees || [] });
+    } catch (error) {
+      console.error("Error deleting payee:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to delete payee");
     }
   },
 
-  highlightPayee: (payeeId: string) => {
-    const { highlightedPayeeIds } = get();
-    const newHighlightedIds = new Set(highlightedPayeeIds);
-    newHighlightedIds.add(payeeId);
-
-    set({
-      highlightedPayeeIds: newHighlightedIds,
-      lastActionPayeeId: payeeId,
-    });
-
-    // Remove highlight after 3 seconds
-    setTimeout(() => {
-      const currentState = get();
-      const updatedIds = new Set(currentState.highlightedPayeeIds);
-      updatedIds.delete(payeeId);
-
-      set({
-        highlightedPayeeIds: updatedIds,
-        lastActionPayeeId: currentState.lastActionPayeeId === payeeId ? null : currentState.lastActionPayeeId,
+  bulkDeletePayees: async (ids: string[]) => {
+    try {
+      const response = await api.delete("/api/payee/bulk-delete", {
+        body: JSON.stringify({ payeeIds: ids }),
       });
-    }, 3000);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to delete payees");
+      }
+      const data = await response.json();
+      set({ payees: data.payees || [] });
+    } catch (error) {
+      console.error("Error bulk deleting payees:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to delete payees");
+    }
   },
 
-  clearError: () => {
-    set({ error: null });
+  mergePayees: async (sourceId: string, targetId: string) => {
+    try {
+      const response = await api.post("/api/payee/merge", {
+        sourcePayeeId: sourceId,
+        targetPayeeId: targetId,
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to merge payees");
+      }
+      const data = await response.json();
+      set({ payees: data.payees || [] });
+    } catch (error) {
+      console.error("Error merging payees:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to merge payees");
+    }
   },
 
-  // Helper functions
-  findPayeeByName: (name: string, caseSensitive?: boolean) => {
-    const { payees } = get();
-    const foundPayee = payees.find((payee) =>
-      caseSensitive ? payee.name === name : payee.name.toLowerCase() === name.toLowerCase()
-    );
-    return foundPayee || null;
+  downloadPayees: async () => {
+    try {
+      const response = await api.get("/api/payee/download");
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to download payees");
+      }
+      // Create a blob and download the file
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "payees.csv";
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("Error downloading payees:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to download payees");
+    }
   },
+
+  setPayees: (payees) => set({ payees }),
+  setLoading: (loading) => set({ isLoading: loading }),
+  setError: (error) => set({ error }),
 
   // Real-time subscription functions
   subscribeToPayees: (companyId: string) => {

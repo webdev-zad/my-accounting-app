@@ -18,7 +18,10 @@ export async function GET(request: NextRequest) {
     const parent_id = searchParams.get("parent_id");
 
     // Build query
-    let query = supabase.from("chart_of_accounts").select("*").eq("company_id", companyId);
+    let query = supabase
+      .from("chart_of_accounts")
+      .select("id, name, type, parent_id, created_at, updated_at")
+      .eq("company_id", companyId);
 
     // Add filters if provided
     if (type) {
@@ -39,11 +42,30 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Failed to fetch categories" }, { status: 500 });
     }
 
-    return NextResponse.json({
-      categories: categories || [],
+    // Convert to CSV format
+    const csvHeader = "ID,Name,Type,Parent ID,Created At,Updated At\n";
+    const csvRows =
+      categories
+        ?.map(
+          (category) =>
+            `"${category.id}","${category.name}","${category.type}","${category.parent_id || ""}","${
+              category.created_at
+            }","${category.updated_at}"`
+        )
+        .join("\n") || "";
+
+    const csvContent = csvHeader + csvRows;
+
+    // Return CSV file
+    return new NextResponse(csvContent, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/csv",
+        "Content-Disposition": 'attachment; filename="categories.csv"',
+      },
     });
   } catch (error) {
-    console.error("Error in GET /api/category:", error);
+    console.error("Error in GET /api/category/download:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
