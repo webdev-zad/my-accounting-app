@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 
-interface Category {
+export interface Category {
   id: string;
   name: string;
   type: string;
@@ -16,15 +16,28 @@ interface CategoriesState {
   categories: Category[];
   isLoading: boolean;
   error: string | null;
+  highlightedCategoryIds: Set<string>;
+  lastActionCategoryId: string | null;
 
   // Actions
   refreshCategories: () => Promise<void>;
-  addCategory: (categoryData: { name: string; type: string; parent_id?: string | null }) => Promise<void>;
-  updateCategory: (id: string, updates: { name?: string; type?: string; parent_id?: string | null }) => Promise<void>;
-  deleteCategory: (id: string) => Promise<void>;
+  addCategory: (categoryData: { name: string; type: string; parent_id?: string | null }) => Promise<boolean>;
+  createCategoryForTransaction: (name: string, type: string) => Promise<Category | null>;
+  updateCategory: (
+    id: string,
+    updates: { name?: string; type?: string; parent_id?: string | null }
+  ) => Promise<boolean>;
+  updateCategoryWithMergeCheck: (
+    id: string,
+    updates: { name?: string; type?: string; parent_id?: string | null }
+  ) => Promise<boolean>;
+  deleteCategory: (id: string) => Promise<boolean>;
   bulkDeleteCategories: (categoryIds: string[]) => Promise<void>;
   bulkCreateCategories: (categories: Array<{ name: string; type: string; parent_id?: string | null }>) => Promise<void>;
   downloadCategories: (filters?: { type?: string; parent_id?: string }) => Promise<void>;
+  mergeCategories: (sourceIds: string[], targetId: string) => Promise<boolean>;
+  mergeFromRename: (originalId: string, newId: string) => Promise<boolean>;
+  highlightCategory: (categoryId: string) => void;
   setCategories: (categories: Category[]) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -39,6 +52,8 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => ({
   categories: [],
   isLoading: false,
   error: null,
+  highlightedCategoryIds: new Set(),
+  lastActionCategoryId: null,
   subscriptions: [],
 
   refreshCategories: async () => {
@@ -66,9 +81,26 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => ({
       }
       const data = await response.json();
       set({ categories: data.categories || [] });
+      return true;
     } catch (error) {
       console.error("Error adding category:", error);
       throw new Error(error instanceof Error ? error.message : "Failed to add category");
+    }
+  },
+
+  createCategoryForTransaction: async (name: string, type: string) => {
+    try {
+      const response = await api.post("/api/category/create", { name, type });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create category");
+      }
+      const data = await response.json();
+      set({ categories: data.categories || [] });
+      return data.category || null;
+    } catch (error) {
+      console.error("Error creating category for transaction:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to create category");
     }
   },
 
@@ -81,9 +113,26 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => ({
       }
       const data = await response.json();
       set({ categories: data.categories || [] });
+      return true;
     } catch (error) {
       console.error("Error updating category:", error);
       throw new Error(error instanceof Error ? error.message : "Failed to update category");
+    }
+  },
+
+  updateCategoryWithMergeCheck: async (id: string, updates) => {
+    try {
+      const response = await api.put("/api/category/update-with-merge-check", { id, ...updates });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to update category with merge check");
+      }
+      const data = await response.json();
+      set({ categories: data.categories || [] });
+      return true;
+    } catch (error) {
+      console.error("Error updating category with merge check:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to update category with merge check");
     }
   },
 
@@ -98,6 +147,7 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => ({
       }
       const data = await response.json();
       set({ categories: data.categories || [] });
+      return true;
     } catch (error) {
       console.error("Error deleting category:", error);
       throw new Error(error instanceof Error ? error.message : "Failed to delete category");
@@ -164,6 +214,50 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => ({
       console.error("Error downloading categories:", error);
       throw new Error(error instanceof Error ? error.message : "Failed to download categories");
     }
+  },
+
+  mergeCategories: async (sourceIds: string[], targetId: string) => {
+    try {
+      const response = await api.post("/api/category/merge-categories", { sourceIds, targetId });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to merge categories");
+      }
+      const data = await response.json();
+      set({ categories: data.categories || [] });
+      return true;
+    } catch (error) {
+      console.error("Error merging categories:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to merge categories");
+    }
+  },
+
+  mergeFromRename: async (originalId: string, newId: string) => {
+    try {
+      const response = await api.post("/api/category/merge-from-rename", { originalId, newId });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to merge from rename");
+      }
+      const data = await response.json();
+      set({ categories: data.categories || [] });
+      return true;
+    } catch (error) {
+      console.error("Error merging from rename:", error);
+      throw new Error(error instanceof Error ? error.message : "Failed to merge from rename");
+    }
+  },
+
+  highlightCategory: (categoryId: string) => {
+    set((state) => {
+      const newHighlighted = new Set(state.highlightedCategoryIds);
+      if (newHighlighted.has(categoryId)) {
+        newHighlighted.delete(categoryId);
+      } else {
+        newHighlighted.add(categoryId);
+      }
+      return { highlightedCategoryIds: newHighlighted };
+    });
   },
 
   setCategories: (categories) => set({ categories }),

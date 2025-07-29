@@ -811,34 +811,18 @@ export default function ChartOfAccountsPage() {
 
     try {
       // Use the new store method that handles merge detection
-      const result = await updateCategoryWithMergeCheck(
-        editingIdToUpdate,
-        {
-          name: currentValues.name,
-          type: currentValues.type,
-          parent_id: currentValues.parent_id === "" ? null : currentValues.parent_id,
-        },
-        {
-          allowMergePrompt: true,
-          companyId: currentCompany!.id,
-        }
-      );
+      const result = await updateCategoryWithMergeCheck(editingIdToUpdate, {
+        name: currentValues.name,
+        type: currentValues.type,
+        parent_id: currentValues.parent_id === "" ? null : currentValues.parent_id,
+      });
 
-      if (result.needsMerge && result.existingCategory) {
-        // Show rename merge modal
-        setRenameMergeModal({
-          isOpen: true,
-          originalCategory,
-          existingCategory: result.existingCategory,
-          isLoading: false,
-          error: null,
-        });
-        return;
-      }
-
-      if (!result.success) {
-        alert(result.error || "Error saving changes. Please try again.");
-        return;
+      if (result) {
+        // Success
+        setEditingId(null);
+        await fetchParentOptions();
+      } else {
+        alert("Error saving changes. Please try again.");
       }
 
       // If this chart of accounts entry is linked to a plaid account, also update the accounts table
@@ -1005,9 +989,7 @@ export default function ChartOfAccountsPage() {
 
     try {
       // Update using the store
-      const success = await updatePayee(editingPayeeIdToUpdate, {
-        name: currentValue,
-      });
+      const success = await updatePayee(editingPayeeIdToUpdate, currentValue);
 
       if (!success) {
         alert(payeesError || "Error saving changes. Please try again.");
@@ -1033,7 +1015,7 @@ export default function ChartOfAccountsPage() {
 
     try {
       const selectedCategoryIds = Array.from(mergeModal.selectedCategories);
-      const success = await mergeCategories(selectedCategoryIds, mergeModal.targetCategoryId, currentCompany.id);
+      const success = await mergeCategories(selectedCategoryIds, mergeModal.targetCategoryId!);
 
       if (success) {
         // Success - close modal
@@ -1997,7 +1979,10 @@ export default function ChartOfAccountsPage() {
           </div>
 
           {/* Categories Table */}
-          <div className="bg-white rounded shadow-sm max-h-[calc(100vh-250px)] overflow-y-auto" ref={categoriesTableRef}>
+          <div
+            className="bg-white rounded shadow-sm max-h-[calc(100vh-250px)] overflow-y-auto"
+            ref={categoriesTableRef}
+          >
             <table className="w-full border-collapse border border-gray-300 text-xs table-fixed">
               <colgroup>
                 <col className="w-auto" />
@@ -3002,8 +2987,7 @@ export default function ChartOfAccountsPage() {
                       // Use the specific merge from rename method
                       const success = await mergeFromRename(
                         renameMergeModal.originalCategory.id,
-                        renameMergeModal.existingCategory.id,
-                        currentCompany.id
+                        renameMergeModal.existingCategory.id
                       );
 
                       if (success) {
@@ -3065,9 +3049,7 @@ export default function ChartOfAccountsPage() {
           </DialogHeader>
 
           {mergeModal.error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded">
-              {mergeModal.error}
-            </div>
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded">{mergeModal.error}</div>
           )}
 
           {mergeModal.isLoading ? (

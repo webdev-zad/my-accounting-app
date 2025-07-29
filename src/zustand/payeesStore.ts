@@ -14,16 +14,19 @@ interface PayeesState {
   payees: Payee[];
   isLoading: boolean;
   error: string | null;
+  highlightedPayeeIds: Set<string>;
+  lastActionPayeeId: string | null;
 
   // Actions
   refreshPayees: () => Promise<void>;
-  addPayee: (payeeData: { name: string }) => Promise<void>;
+  addPayee: (payeeData: { name: string }) => Promise<boolean>;
   createPayeeForTransaction: (name: string) => Promise<Payee | null>;
-  updatePayee: (id: string, name: string) => Promise<void>;
-  deletePayee: (id: string) => Promise<void>;
+  updatePayee: (id: string, name: string) => Promise<boolean>;
+  deletePayee: (id: string) => Promise<boolean>;
   bulkDeletePayees: (ids: string[]) => Promise<void>;
   mergePayees: (sourceId: string, targetId: string) => Promise<void>;
   downloadPayees: () => Promise<void>;
+  highlightPayee: (payeeId: string) => void;
   setPayees: (payees: Payee[]) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -38,6 +41,8 @@ export const usePayeesStore = create<PayeesState>((set, get) => ({
   payees: [],
   isLoading: false,
   error: null,
+  highlightedPayeeIds: new Set(),
+  lastActionPayeeId: null,
   subscriptions: [],
 
   refreshPayees: async () => {
@@ -75,6 +80,7 @@ export const usePayeesStore = create<PayeesState>((set, get) => ({
       const data = await response.json();
       // Update the store with the new payees list
       set({ payees: data.payees || [] });
+      return true;
     } catch (error) {
       console.error("Error adding payee:", error);
       throw new Error(error instanceof Error ? error.message : "Failed to add payee");
@@ -106,6 +112,7 @@ export const usePayeesStore = create<PayeesState>((set, get) => ({
       }
       const data = await response.json();
       set({ payees: data.payees || [] });
+      return true;
     } catch (error) {
       console.error("Error updating payee:", error);
       throw new Error(error instanceof Error ? error.message : "Failed to update payee");
@@ -123,6 +130,7 @@ export const usePayeesStore = create<PayeesState>((set, get) => ({
       }
       const data = await response.json();
       set({ payees: data.payees || [] });
+      return true;
     } catch (error) {
       console.error("Error deleting payee:", error);
       throw new Error(error instanceof Error ? error.message : "Failed to delete payee");
@@ -185,6 +193,18 @@ export const usePayeesStore = create<PayeesState>((set, get) => ({
       console.error("Error downloading payees:", error);
       throw new Error(error instanceof Error ? error.message : "Failed to download payees");
     }
+  },
+
+  highlightPayee: (payeeId: string) => {
+    set((state) => {
+      const newHighlightedPayeeIds = new Set(state.highlightedPayeeIds);
+      if (newHighlightedPayeeIds.has(payeeId)) {
+        newHighlightedPayeeIds.delete(payeeId);
+      } else {
+        newHighlightedPayeeIds.add(payeeId);
+      }
+      return { highlightedPayeeIds: newHighlightedPayeeIds };
+    });
   },
 
   setPayees: (payees) => set({ payees }),
